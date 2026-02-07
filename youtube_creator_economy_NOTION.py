@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-YouTube Creator Economy Transcriber - Direct URL Method
-Uses Gemini's native YouTube URL support - NO downloads needed!
+YouTube Creator Economy Transcriber - WORKING VERSION
+Uses YouTube API to get videos from @ handles, Gemini to transcribe from URLs
 """
 
 import os
@@ -10,7 +10,7 @@ import requests
 from datetime import datetime
 from dateutil import parser
 import google.generativeai as genai
-import feedparser
+from googleapiclient.discovery import build
 
 class YouTubeCreatorEconomyAutomation:
     def __init__(self):
@@ -18,38 +18,40 @@ class YouTubeCreatorEconomyAutomation:
         self.force_clear_api_storage()
         self.processed_videos_cache = self.load_processed_videos_from_notion()
         
-        # Channel mapping: ID -> Name
-        self.channel_names = {
-            "UCjK0F1DopxQ5U0sCwOlXwOg": "Mogul Mail",
-            "UCgIzTPYitha6idOdrr7M8sQ": "Creator Support",
-            "UC0HdzoHv5W62W7gEINiuqVA": "Jon Youshaei",
-            "UCzQUP1qoWDoEbmsQxvdjxgQ": "YouTube Creators Hub",
-            "UCKuHFYu3smtrl2uhTdk748w": "VidIQ",
-            "UCyxPuL7VYqUfBW0rPH3f-Ow": "TubeBuddy",
-            "UCbxy8qJgfi3JA2e9JkX7hRQ": "Coco Mocoe",
-            "UCoNHD0-Qh8HVEH1kC1bMnuA": "Oren John",
-            "UCJ6qy2E6FIIGkRkBVGmn1rg": "Jules Terpak",
-            "UCGMGFoNsKY4JJUpBWIViQvQ": "Internet Anarchist",
-            "UCCj956IF62FbT7Gouszaj9w": "Aprilynne Alter",
-            "UCXuqSBlHAE6Xw-yeJA0Tunw": "Film Booth",
-            "UCX-9TgLZUaQf0aCIQ3gBx0g": "Izzzyzzz",
-            "UCQn_kXNZKLrWoUTCfxZpqhw": "ISAAC",
-            "UCY6DpwQetygtye7GM1zVHmw": "Tiffany Ferg",
-            "UCrCTC5_t-HaVJ025DbYITiw": "Alice Cappelle",
-            "UCbuf70y__Wh3MRxZcbj778Q": "Khadija Mbowe",
-            "UCp38w5n099xkvoqciOaeFag": "Taylor Lorenz"
-        }
+        # Channel @ handles - easier to maintain!
+        self.channel_handles = [
+            "@mogulmail",
+            "@creatorsupportpod",
+            "@youshaei",
+            "@youtubecreatorshubpod",
+            "@vidiq",
+            "@tubebuddy",
+            "@CocoMocoe",
+            "@orenmeetsworld",
+            "@julesterpak",
+            "@InternetAnarchist",
+            "@AprilynneAlter",
+            "@FilmBooth",
+            "@Izzzyzzz",
+            "@IsaacGarciaFilms",
+            "@tiffanyferg",
+            "@AliceCappelle",
+            "@KhadijaMbowe",
+            "@taylorlorenz"
+        ]
 
     def load_env_configs(self):
         """Load configuration from environment variables."""
         self.gemini_key = os.environ.get('GEMINI_API_KEY')
+        self.youtube_api_key = os.environ.get('YOUTUBE_API_KEY')
         self.notion_token = os.environ.get('NOTION_API_KEY')
         self.notion_database_id = os.environ.get('NOTION_DATABASE_ID')
         
-        if not all([self.gemini_key, self.notion_token, self.notion_database_id]):
+        if not all([self.gemini_key, self.youtube_api_key, self.notion_token, self.notion_database_id]):
             raise ValueError("Missing required environment variables")
         
         genai.configure(api_key=self.gemini_key)
+        self.youtube = build('youtube', 'v3', developerKey=self.youtube_api_key)
         print("✓ Environment configured")
 
     def force_clear_api_storage(self):
@@ -110,25 +112,52 @@ class YouTubeCreatorEconomyAutomation:
             print(f"  Warning: {e}")
             return set()
 
-    def get_channel_videos(self, channel_id, max_results=5):
-        """Get latest videos from a YouTube channel using RSS feed."""
+    def get_channel_videos_by_handle(self, handle, max_results=5):
+        """Get latest videos from a YouTube channel using @ handle."""
         try:
-            rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-            feed = feedparser.parse(rss_url)
+            # First, get the channel ID from the handle
+            search_response = self.youtube.search().list(
+                part='snippet',
+                q=handle,
+                type='channel',
+                maxResults=1
+            ).execute()
+            
+            if not search_response.get('items'):
+                print(f"  Channel not found: {handle}")
+                return []
+            
+            channel_id = search_response['items'][0]['snippet']['channelId']
+            channel_title = search_response['items'][0]['snippet']['title']
+            
+            # Get the uploads playlist ID
+            channel_response = self.youtube.channels().list(
+                part='contentDetails',
+                id=channel_id
+            ).execute()
+            
+            uploads_playlist_id = channel_response['items'][0]['contentDetails']['relatedPlaylists']['uploads']
+            
+            # Get videos from uploads playlist
+            playlist_response = self.youtube.playlistItems().list(
+                part='snippet',
+                playlistId=uploads_playlist_id,
+                maxResults=max_results
+            ).execute()
             
             videos = []
-            for entry in feed.entries[:max_results]:
-                video_id = entry.yt_videoid
+            for item in playlist_response.get('items', []):
+                video_id = item['snippet']['resourceId']['videoId']
                 videos.append({
                     'video_id': video_id,
-                    'title': entry.title,
-                    'channel': self.channel_names.get(channel_id, entry.author),
-                    'published': entry.published
+                    'title': item['snippet']['title'],
+                    'channel': channel_title,
+                    'published': item['snippet']['publishedAt']
                 })
             
             return videos
         except Exception as e:
-            print(f"  Error getting channel videos: {e}")
+            print(f"  Error getting videos for {handle}: {e}")
             return []
 
     def transcribe_youtube_url(self, video_url, max_retries=3):
@@ -293,17 +322,16 @@ Video: {video_url}"""
     def run(self):
         """Main loop."""
         print("\n" + "="*80)
-        print("YOUTUBE CREATOR ECONOMY TRANSCRIBER - Direct URL Method")
+        print("YOUTUBE CREATOR ECONOMY TRANSCRIBER")
         print("="*80)
         
         total = 0
         all_videos = []
         
-        for channel_id in self.channel_names.keys():
+        for handle in self.channel_handles:
             try:
-                channel_name = self.channel_names[channel_id]
-                print(f"\n{'#'*80}\nChannel: {channel_name}\n{'#'*80}")
-                videos = self.get_channel_videos(channel_id, max_results=5)
+                print(f"\n{'#'*80}\nChannel: {handle}\n{'#'*80}")
+                videos = self.get_channel_videos_by_handle(handle, max_results=5)
                 all_videos.extend(videos)
                 print(f"  Found {len(videos)} videos")
             except Exception as e:
