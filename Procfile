@@ -1,1 +1,0 @@
-worker: python youtube_creator_economy_NOTION.py
