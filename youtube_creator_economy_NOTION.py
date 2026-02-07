@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-YouTube Creator Economy Transcriber - Notion
-Pulls latest videos from YouTube channels and transcribes them to Notion
+YouTube Creator Economy Transcriber - Direct URL Method
+Uses Gemini's native YouTube URL support - NO downloads needed!
 """
 
 import os
-import json
 import time
 import requests
 from datetime import datetime
@@ -94,7 +93,6 @@ class YouTubeCreatorEconomyAutomation:
                 
                 for page in data.get('results', []):
                     try:
-                        # Extract video ID from "Video ID" property
                         video_id_prop = page['properties'].get('Video ID', {})
                         if video_id_prop.get('rich_text'):
                             video_id = video_id_prop['rich_text'][0]['text']['content']
@@ -115,9 +113,7 @@ class YouTubeCreatorEconomyAutomation:
     def get_channel_videos(self, channel_id, max_results=5):
         """Get latest videos from a YouTube channel using RSS feed."""
         try:
-            # YouTube RSS feed URL
             rss_url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
-            
             feed = feedparser.parse(rss_url)
             
             videos = []
@@ -135,71 +131,34 @@ class YouTubeCreatorEconomyAutomation:
             print(f"  Error getting channel videos: {e}")
             return []
 
-    def download_youtube_audio(self, video_id):
-        """Download audio from YouTube video using yt-dlp."""
-        import subprocess
-        
-        output_path = f"temp_{video_id}.m4a"
-        
-        try:
-            # Use yt-dlp to download audio
-            cmd = [
-                'yt-dlp',
-                '-f', 'bestaudio',
-                '-x',
-                '--audio-format', 'm4a',
-                '-o', output_path,
-                f'https://www.youtube.com/watch?v={video_id}'
-            ]
-            
-            subprocess.run(cmd, check=True, capture_output=True)
-            return output_path
-            
-        except Exception as e:
-            print(f"  Error downloading video: {e}")
-            return None
-
-    def transcribe_with_retry(self, audio_file, max_retries=5):
-        """Transcribe audio with retry logic."""
+    def transcribe_youtube_url(self, video_url, max_retries=3):
+        """Transcribe YouTube video directly from URL using Gemini."""
         for attempt in range(max_retries):
-            gemini_file = None
             try:
-                print(f"  [{attempt + 1}/{max_retries}] Uploading...")
-                gemini_file = genai.upload_file(path=audio_file)
+                print(f"  [{attempt + 1}/{max_retries}] Transcribing from URL...")
                 
-                print("  → Processing...")
-                start_time = time.time()
-                
-                while gemini_file.state.name == "PROCESSING":
-                    if time.time() - start_time > 600:
-                        raise Exception("Timeout")
-                    time.sleep(5)
-                    gemini_file = genai.get_file(gemini_file.name)
-                
-                if gemini_file.state.name == "FAILED":
-                    raise Exception("Processing failed")
-                
-                print("  → Generating transcript...")
-                model = genai.GenerativeModel("gemini-2.5-flash")
+                model = genai.GenerativeModel("gemini-2.0-flash-exp")
                 
                 # Get summary
-                summary_prompt = "Provide a 2-3 sentence summary of this video's main topics."
+                summary_prompt = f"Watch this YouTube video and provide a 2-3 sentence summary of the main topics: {video_url}"
                 try:
-                    summary_response = model.generate_content([summary_prompt, gemini_file])
+                    summary_response = model.generate_content(summary_prompt)
                     summary = summary_response.text.strip()
                 except:
-                    summary = "Video discussing creator economy topics."
+                    summary = "Creator economy discussion video."
                 
-                # Get transcript with formatting
-                transcript_prompt = """Transcribe this video with formatting:
+                # Get transcript
+                transcript_prompt = f"""Watch this YouTube video and provide a complete transcript with formatting:
 1. Paragraph breaks every 2-3 sentences
-2. Speaker labels if multiple speakers
-3. Mark ads/sponsors as [AD]
-4. Readable structure"""
+2. Speaker labels if multiple speakers (Speaker 1:, Speaker 2:, etc.)
+3. Mark ads/sponsors as [AD] or [SPONSOR]
+4. Readable structure with proper punctuation
+
+Video: {video_url}"""
                 
                 try:
                     response = model.generate_content(
-                        [transcript_prompt, gemini_file],
+                        transcript_prompt,
                         safety_settings={
                             'HARASSMENT': 'BLOCK_NONE',
                             'HATE_SPEECH': 'BLOCK_NONE',
@@ -210,30 +169,18 @@ class YouTubeCreatorEconomyAutomation:
                     transcript = response.text
                 except:
                     basic_response = model.generate_content(
-                        ["Transcribe this video.", gemini_file],
+                        f"Transcribe this YouTube video: {video_url}",
                         safety_settings={'HARASSMENT': 'BLOCK_NONE', 'HATE_SPEECH': 'BLOCK_NONE', 'SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'DANGEROUS_CONTENT': 'BLOCK_NONE'}
                     )
                     transcript = basic_response.text
                 
                 print("  ✓ Transcript generated")
-                
-                try:
-                    genai.delete_file(gemini_file.name)
-                except:
-                    pass
-                
                 return {'summary': summary, 'transcript': transcript}
                 
             except Exception as e:
                 print(f"  ✗ Error: {e}")
-                if gemini_file:
-                    try:
-                        genai.delete_file(gemini_file.name)
-                    except:
-                        pass
-                
                 if attempt < max_retries - 1:
-                    time.sleep(60 * (2 ** attempt))
+                    time.sleep(30 * (2 ** attempt))
                 else:
                     raise
 
@@ -247,11 +194,9 @@ class YouTubeCreatorEconomyAutomation:
             except:
                 notion_date = datetime.now().strftime('%Y-%m-%d')
             
-            # Trim summary
             if len(summary) > 2000:
                 summary = summary[:1997] + "..."
             
-            # Split transcript into chunks
             chunks = []
             for i in range(0, len(transcript), 2000):
                 chunks.append({
@@ -266,7 +211,6 @@ class YouTubeCreatorEconomyAutomation:
                 "Notion-Version": "2022-06-28"
             }
             
-            # Create page with first 98 chunks
             initial_blocks = [
                 {"object": "block", "type": "heading_1", "heading_1": {"rich_text": [{"text": {"content": "Full Transcript"}}]}},
                 {"object": "block", "type": "divider", "divider": {}}
@@ -296,7 +240,6 @@ class YouTubeCreatorEconomyAutomation:
             
             print(f"  ✓ Created page")
             
-            # Append remaining chunks
             remaining = chunks[98:]
             if remaining:
                 print(f"  → Appending {len(remaining)} more blocks...")
@@ -323,18 +266,11 @@ class YouTubeCreatorEconomyAutomation:
         
         print(f"\n{'='*80}\nProcessing: {title}\n{'='*80}")
         
-        audio_path = None
-        
         try:
-            # Download audio
-            print("  → Downloading...")
-            audio_path = self.download_youtube_audio(video_id)
-            if not audio_path:
-                return False
-            print("  ✓ Downloaded")
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
             
-            # Transcribe
-            result = self.transcribe_with_retry(audio_path)
+            # Transcribe directly from URL
+            result = self.transcribe_youtube_url(video_url)
             
             # Save to Notion
             self.add_to_notion(
@@ -353,24 +289,16 @@ class YouTubeCreatorEconomyAutomation:
         except Exception as e:
             print(f"  ✗ FAILED: {e}")
             return False
-            
-        finally:
-            if audio_path and os.path.exists(audio_path):
-                try:
-                    os.remove(audio_path)
-                except:
-                    pass
 
     def run(self):
         """Main loop."""
         print("\n" + "="*80)
-        print("YOUTUBE CREATOR ECONOMY TRANSCRIBER - Notion")
+        print("YOUTUBE CREATOR ECONOMY TRANSCRIBER - Direct URL Method")
         print("="*80)
         
         total = 0
         all_videos = []
         
-        # Get videos from all channels
         for channel_id in self.channel_names.keys():
             try:
                 channel_name = self.channel_names[channel_id]
@@ -381,10 +309,8 @@ class YouTubeCreatorEconomyAutomation:
             except Exception as e:
                 print(f"  Error: {e}")
         
-        # Remove duplicates
         unique_videos = {v['video_id']: v for v in all_videos}.values()
         
-        # Process videos
         for video in unique_videos:
             if self.process_video(video):
                 total += 1
