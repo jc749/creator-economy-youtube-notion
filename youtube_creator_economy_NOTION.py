@@ -155,7 +155,7 @@ class YouTubeCreatorEconomyAutomation:
             summary_prompt = f"Provide a 2-3 sentence summary of the main topics discussed in this video."
             
             summary_response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash-exp",
+                model="gemini-2.5-flash",
                 contents=[
                     types.Content(
                         parts=[
@@ -175,7 +175,7 @@ class YouTubeCreatorEconomyAutomation:
 - Mark ads/sponsors as [AD]"""
             
             transcript_response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash-exp",
+                model="gemini-2.5-flash",
                 contents=[
                     types.Content(
                         parts=[
