@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-YouTube Creator Economy Transcriber - WORKING VERSION
-Uses YouTube API to get videos from @ handles, Gemini to transcribe from URLs
+YouTube Creator Economy Transcriber - ACTUALLY WORKING VERSION
+Uses NEW google-genai SDK that supports YouTube URLs
 """
 
 import os
@@ -9,16 +9,16 @@ import time
 import requests
 from datetime import datetime
 from dateutil import parser
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from googleapiclient.discovery import build
 
 class YouTubeCreatorEconomyAutomation:
     def __init__(self):
         self.load_env_configs()
-        self.force_clear_api_storage()
         self.processed_videos_cache = self.load_processed_videos_from_notion()
         
-        # Channel @ handles - easier to maintain!
+        # Channel @ handles
         self.channel_handles = [
             "@mogulmail",
             "@creatorsupportpod",
@@ -50,24 +50,10 @@ class YouTubeCreatorEconomyAutomation:
         if not all([self.gemini_key, self.youtube_api_key, self.notion_token, self.notion_database_id]):
             raise ValueError("Missing required environment variables")
         
-        genai.configure(api_key=self.gemini_key)
+        # NEW SDK!
+        self.gemini_client = genai.Client(api_key=self.gemini_key)
         self.youtube = build('youtube', 'v3', developerKey=self.youtube_api_key)
         print("✓ Environment configured")
-
-    def force_clear_api_storage(self):
-        """Delete orphaned Gemini files."""
-        print("\n--- Cleaning Gemini Storage ---")
-        try:
-            files = list(genai.list_files())
-            if files:
-                for f in files:
-                    try:
-                        genai.delete_file(f.name)
-                    except:
-                        pass
-                print(f"  ✓ Deleted {len(files)} files")
-        except Exception as e:
-            print(f"  Warning: {e}")
 
     def load_processed_videos_from_notion(self):
         """Load all processed video IDs from Notion."""
@@ -115,7 +101,7 @@ class YouTubeCreatorEconomyAutomation:
     def get_channel_videos_by_handle(self, handle, max_results=5):
         """Get latest videos from a YouTube channel using @ handle."""
         try:
-            # First, get the channel ID from the handle
+            # Get the channel ID from the handle
             search_response = self.youtube.search().list(
                 part='snippet',
                 q=handle,
@@ -160,58 +146,56 @@ class YouTubeCreatorEconomyAutomation:
             print(f"  Error getting videos for {handle}: {e}")
             return []
 
-    def transcribe_youtube_url(self, video_url, max_retries=3):
-        """Transcribe YouTube video directly from URL using Gemini."""
-        for attempt in range(max_retries):
-            try:
-                print(f"  [{attempt + 1}/{max_retries}] Transcribing from URL...")
-                
-                model = genai.GenerativeModel("gemini-2.0-flash-exp")
-                
-                # Get summary
-                summary_prompt = f"Watch this YouTube video and provide a 2-3 sentence summary of the main topics: {video_url}"
-                try:
-                    summary_response = model.generate_content(summary_prompt)
-                    summary = summary_response.text.strip()
-                except:
-                    summary = "Creator economy discussion video."
-                
-                # Get transcript
-                transcript_prompt = f"""Watch this YouTube video and provide a complete transcript with formatting:
-1. Paragraph breaks every 2-3 sentences
-2. Speaker labels if multiple speakers (Speaker 1:, Speaker 2:, etc.)
-3. Mark ads/sponsors as [AD] or [SPONSOR]
-4. Readable structure with proper punctuation
-
-Video: {video_url}"""
-                
-                try:
-                    response = model.generate_content(
-                        transcript_prompt,
-                        safety_settings={
-                            'HARASSMENT': 'BLOCK_NONE',
-                            'HATE_SPEECH': 'BLOCK_NONE',
-                            'SEXUALLY_EXPLICIT': 'BLOCK_NONE',
-                            'DANGEROUS_CONTENT': 'BLOCK_NONE'
-                        }
+    def transcribe_youtube_url(self, video_url):
+        """Transcribe YouTube video using NEW SDK that actually supports YouTube URLs."""
+        try:
+            print(f"  Transcribing from YouTube URL...")
+            
+            # Get summary
+            summary_prompt = f"Provide a 2-3 sentence summary of the main topics discussed in this video."
+            
+            summary_response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=[
+                    types.Content(
+                        parts=[
+                            types.Part(file_data=types.FileData(file_uri=video_url)),
+                            types.Part(text=summary_prompt)
+                        ]
                     )
-                    transcript = response.text
-                except:
-                    basic_response = model.generate_content(
-                        f"Transcribe this YouTube video: {video_url}",
-                        safety_settings={'HARASSMENT': 'BLOCK_NONE', 'HATE_SPEECH': 'BLOCK_NONE', 'SEXUALLY_EXPLICIT': 'BLOCK_NONE', 'DANGEROUS_CONTENT': 'BLOCK_NONE'}
+                ]
+            )
+            summary = summary_response.text.strip()
+            
+            # Get transcript
+            transcript_prompt = """Generate a complete transcript of this video with:
+- Paragraph breaks for readability
+- Speaker labels if multiple speakers
+- Timestamps where helpful
+- Mark ads/sponsors as [AD]"""
+            
+            transcript_response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-exp",
+                contents=[
+                    types.Content(
+                        parts=[
+                            types.Part(file_data=types.FileData(file_uri=video_url)),
+                            types.Part(text=transcript_prompt)
+                        ]
                     )
-                    transcript = basic_response.text
-                
-                print("  ✓ Transcript generated")
-                return {'summary': summary, 'transcript': transcript}
-                
-            except Exception as e:
-                print(f"  ✗ Error: {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(30 * (2 ** attempt))
-                else:
-                    raise
+                ]
+            )
+            transcript = transcript_response.text
+            
+            print("  ✓ Transcript generated")
+            return {'summary': summary, 'transcript': transcript}
+            
+        except Exception as e:
+            print(f"  ✗ Error: {e}")
+            return {
+                'summary': 'Video transcription failed.',
+                'transcript': f'Error: {str(e)}'
+            }
 
     def add_to_notion(self, channel, title, published, video_id, summary, transcript):
         """Add video to Notion with full transcript."""
@@ -298,7 +282,7 @@ Video: {video_url}"""
         try:
             video_url = f"https://www.youtube.com/watch?v={video_id}"
             
-            # Transcribe directly from URL
+            # Transcribe using NEW SDK
             result = self.transcribe_youtube_url(video_url)
             
             # Save to Notion
