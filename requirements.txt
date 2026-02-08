@@ -1,4 +1,4 @@
 requests
 python-dateutil
-google-generativeai==0.8.0
+google-genai
 google-api-python-client
