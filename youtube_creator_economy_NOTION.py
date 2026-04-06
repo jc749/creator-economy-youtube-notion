@@ -124,7 +124,7 @@ class YouTubeCreatorEconomyAutomation:
             print(f"  Warning: {e}")
             return set(), {}
 
-    def get_channel_videos_by_handle(self, handle, max_results=5):
+    def get_channel_videos_by_handle(self, handle, max_results=50):
         """Get latest videos from a YouTube channel using @ handle."""
         try:
             # Get the channel ID from the handle
@@ -505,7 +505,7 @@ class YouTubeCreatorEconomyAutomation:
         for handle in self.channel_handles:
             try:
                 print(f"\n{'#'*80}\nChannel: {handle}\n{'#'*80}")
-                videos = self.get_channel_videos_by_handle(handle, max_results=5)
+                videos = self.get_channel_videos_by_handle(handle, max_results=50)
                 all_videos.extend(videos)
                 print(f"  Found {len(videos)} videos")
             except Exception as e:
